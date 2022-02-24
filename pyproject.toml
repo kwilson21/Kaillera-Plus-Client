@@ -1,0 +1,29 @@
+[project]
+name = ""
+version = ""
+description = ""
+authors = [
+    {name = "Kazon Wilson", email = "10987837+kwilson21@users.noreply.github.com"},
+]
+dependencies = [
+    "py-cord==2.0.0b4",
+    "fastapi==0.74.1",
+    "uvicorn[standard]==0.17.5",
+    "honcho==1.1.0",
+    "fastapi-discord==0.1.6",
+    "bidict==0.21.4",
+]
+requires-python = ">=3.10"
+license = {text = "GNU"}
+
+[project.urls]
+Homepage = ""
+[tool.pdm]
+
+[build-system]
+requires = ["pdm-pep517"]
+build-backend = "pdm.pep517.api"
+
+[tool.pdm.scripts]
+start.cmd = "uvicorn run:app --port $PORT --host 0.0.0.0"
+start.env_file = ".env"
