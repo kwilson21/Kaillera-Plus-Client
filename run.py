@@ -102,7 +102,6 @@ async def process_ws_data(websocket: WebSocket, data: str, user_id: int):
         authenticated_connection_manager.disconnect(websocket, user_id)
     elif data.startswith("GAME LIST"):
         user.game_list = data[9:].split(",")
-        print(data[9:])
     elif data.startswith("SERVER IP"):
         user.game.address = data[9:]
     elif data.startswith("DROP"):
@@ -111,8 +110,8 @@ async def process_ws_data(websocket: WebSocket, data: str, user_id: int):
 
 async def remove_user_if_not_authenticated(user_id: int):
     global user_map
-    # User has 60 seconds to enter confirmation code
-    await asyncio.sleep(60)
+    # User has 2 minutes to enter confirmation code
+    await asyncio.sleep(120)
     user = user_map.get(user_id)
     if user and user.auth_state != AuthState.AUTH_SUCCESS:
         user_map.pop(user_id)
@@ -155,8 +154,10 @@ async def auth_websocket_endpoint(websocket: WebSocket):
             if data.startswith("START AUTH"):
                 oauth_login_url = (
                     "https://discord.com/oauth2/authorize?client_id={client_id}"
-                    "&redirect_uri=http://localhost:5000/callback&scope=identify"
-                    "&response_type=code".format(client_id=os.environ["DISCORD_CLIENT_ID"])
+                    "&redirect_uri={redirect_uri}&scope=identify"
+                    "&response_type=code".format(
+                        client_id=os.environ["DISCORD_CLIENT_ID"], redirect_uri=os.environ["DISCORD_REDIRECT_URI"]
+                    )
                 )
 
                 await websocket.send_text(f"AUTH URL{oauth_login_url}")
@@ -219,7 +220,7 @@ async def creategame(ctx, rom_name: str):
     else:
         user.game = Game(players=[user], id=ctx.author.id, owner=user, rom_name=rom_name)
         websocket = authenticated_connection_manager.active_connections[ctx.author.id]
-        await websocket.send_text("CREATE GAME")
+        await websocket.send_text(f"CREATE GAME{rom_name}")
         await ctx.respond(f"{ctx.author.mention} has created a game! Game ID: {ctx.author.id}")
 
 
@@ -283,9 +284,10 @@ async def joingame(ctx, game_id: str):
         await ctx.respond(f"You do not have own this ROM {game_owner.game.rom_name}!")
     else:
         websocket = authenticated_connection_manager.active_connections[ctx.author.id]
-        await websocket.send_text(f"JOIN GAME{game_owner.game.address}")
         game_owner.game.players.append(user)
         user.game = game_owner.game
+        await websocket.send_text(f"JOIN GAME{game_owner.game.address}")
+        await websocket.send_text(f"ROM NAME{game_owner.game.rom_name}")
         await ctx.respond(f"{ctx.author.mention} has joined game ID {game_id}")
 
 
