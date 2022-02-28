@@ -14,6 +14,7 @@ from fastapi import WebSocket
 from fastapi import WebSocketDisconnect
 from fastapi_discord import DiscordOAuthClient
 
+MAX_PLAYERS = 4
 
 app = FastAPI()
 bot = discord.Bot(intents=discord.Intents.all())
@@ -44,6 +45,7 @@ class Game:
     id: int  # noqa: A003
     owner: "DiscordUser"
     rom_name: str
+    thread: Optional[discord.Thread] = None
     address: Optional[str] = None
     status: GameStatus = GameStatus.IDLE
 
@@ -114,7 +116,7 @@ async def remove_user_if_not_authenticated(user_id: int):
     await asyncio.sleep(120)
     user = user_map.get(user_id)
     if user and user.auth_state != AuthState.AUTH_SUCCESS:
-        user_map.pop(user_id)
+        del user_map[user_id]
 
 
 @app.get("/callback")
@@ -122,7 +124,7 @@ async def discord_auth_callback(code: str):
     global user_map
 
     dm_msg = "Use the /cc command to enter the authentication code from your kaillera client"
-    token, refresh_token = await discord_oauth_client.get_access_token(code)
+    token, _ = await discord_oauth_client.get_access_token(code)
 
     payload = {"Authorization": f"Bearer {token}"}
 
@@ -179,18 +181,15 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int):
     except WebSocketDisconnect:
         authenticated_connection_manager.disconnect(websocket, user_id)
         if user_id in user_map:
-            user_map.pop(user_id)
-
-
-@bot.slash_command()
-async def hello(ctx, name: str = None):
-    name = name or ctx.author.name
-    await ctx.respond(f"Hello {name}!")
+            user = user_map.pop(user_id)
+            if user.game.thread:
+                await user.game.thread.delete()
+            del user
 
 
 # Confirmation code
 @bot.slash_command()
-async def cc(ctx, auth_id: str):
+async def cc(ctx: discord.ApplicationContext, auth_id: str):
     global user_map, authenticating_connection_manager
 
     if not auth_id:
@@ -207,7 +206,14 @@ async def cc(ctx, auth_id: str):
 
 # Create a game
 @bot.slash_command()
-async def creategame(ctx, rom_name: str):
+async def creategame(
+    ctx: discord.ApplicationContext,
+    rom_name: discord.Option(
+        str,
+        "Enter the name of the ROM you want to play",  # noqa: F722
+        autocomplete=discord.utils.basic_autocomplete(lambda ctx: user_map[ctx.interaction.user.id].game_list),
+    ),
+):
     global user_map, authenticated_connection_manager
 
     user = user_map.get(ctx.author.id)
@@ -218,15 +224,27 @@ async def creategame(ctx, rom_name: str):
     elif not rom_name or rom_name not in user.game_list:
         await ctx.respond("Please enter a valid ROM name!")
     else:
-        user.game = Game(players=[user], id=ctx.author.id, owner=user, rom_name=rom_name)
+        # game_id = uuid.uuid4().hex
+        game_id = user.id
+        user.game = Game(players=[user], id=game_id, owner=user, rom_name=rom_name)
+
+        # If a user uses this command in a dm, we don't have a channel to create a thread in
+        # so we skip creating a thread and just send a response to the user
+        if not isinstance(ctx.channel, discord.PartialMessageable):
+            thread = await ctx.channel.create_thread(
+                name=f"{ctx.author.name} {rom_name}", type=discord.ChannelType.public_thread
+            )
+            await thread.add_user(ctx.author)
+            user.game.thread = thread
+
         websocket = authenticated_connection_manager.active_connections[ctx.author.id]
         await websocket.send_text(f"CREATE GAME{rom_name}")
-        await ctx.respond(f"{ctx.author.mention} has created a game! Game ID: {ctx.author.id}")
+        await ctx.respond(f"{ctx.author.mention} has created a game! Rom name: {rom_name} Game ID: {game_id}")
 
 
 # Leave a game
 @bot.slash_command()
-async def leavegame(ctx):
+async def leavegame(ctx: discord.ApplicationContext):
     global user_map, authenticated_connection_manager
 
     user = user_map.get(ctx.author.id)
@@ -238,18 +256,24 @@ async def leavegame(ctx):
         websocket = authenticated_connection_manager.active_connections[ctx.author.id]
         await websocket.send_text("LEAVE GAME")
         if user == user.game.owner:
+            if user.game.thread is not None:
+                await user.game.thread.delete()
             for _user in user.game.players[:]:
                 if _user != user:
                     _user.game = None
         else:
             user.game.players.remove(user)
+            if user.game.thread is not None:
+                discord_user = discord.Object(user.id)
+                await user.game.thread.remove_user(discord_user)
+
         user.game = None
         await ctx.respond(f"{ctx.author.mention} has left their game!")
 
 
 # Start game
 @bot.slash_command()
-async def startgame(ctx):
+async def startgame(ctx: discord.ApplicationContext):
     global user_map, authenticated_connection_manager
 
     user = user_map.get(ctx.author.id)
@@ -268,7 +292,18 @@ async def startgame(ctx):
 
 # Join a game
 @bot.slash_command()
-async def joingame(ctx, game_id: str):
+async def joingame(
+    ctx: discord.ApplicationContext,
+    game_id: discord.Option(
+        str,
+        "Enter the game id you want to join",  # noqa: F722
+        autocomplete=discord.utils.basic_autocomplete(
+            lambda ctx: [
+                game.id for game in user_map[ctx.interaction.user.id].game_list if game.status != GameStatus.IDLE
+            ]
+        ),
+    ),
+):
     global user_map, authenticated_connection_manager
     game_id = int(game_id)
 
@@ -286,9 +321,84 @@ async def joingame(ctx, game_id: str):
         websocket = authenticated_connection_manager.active_connections[ctx.author.id]
         game_owner.game.players.append(user)
         user.game = game_owner.game
+
         await websocket.send_text(f"JOIN GAME{game_owner.game.address}")
         await websocket.send_text(f"ROM NAME{game_owner.game.rom_name}")
-        await ctx.respond(f"{ctx.author.mention} has joined game ID {game_id}")
+
+        if game_owner.game.thread is not None:
+            discord_user = discord.Object(user.id)
+            await game_owner.game.thread.add_user(discord_user)
+        else:
+            await ctx.respond(f"{ctx.author.mention} has joined game ID {game_id}")
+
+
+@bot.event
+async def on_thread_member_join(thread_member: discord.ThreadMember):
+    thread_members = await thread_member.thread.fetch_members()
+    # Users can join normal threads, but not kaillera game threads
+    if thread_member.id not in user_map and all(
+        thread_member.id for thread_member in thread_members if thread_member.id in user_map
+    ):
+        await thread_member.thread.remove_user(thread_member.id)
+        return
+    for game_owner in user_map.values():
+        if (
+            game_owner.game is not None
+            and game_owner.game.thread is not None
+            and thread_member.thread == game_owner.game.thread
+            and user_map[thread_member.id].game is None  # This is a hack to make sure the user is not already in a game
+        ):
+            user = user_map.get(thread_member.id)
+            if (
+                not user
+                or game_owner.game.status != GameStatus.IDLE
+                or game_owner.game.rom_name not in user.game_list
+                or len(game_owner.game.players) > MAX_PLAYERS
+            ):
+                # TODO: Send a message to the user with an error
+                await thread_member.thread.remove_user(thread_member.id)
+                return
+
+            if thread_member.id not in [_user.id for _user in game_owner.game.players]:
+                websocket = authenticated_connection_manager.active_connections[thread_member.id]
+                game_owner.game.players.append(user)
+                user.game = game_owner.game
+
+                await websocket.send_text(f"JOIN GAME{game_owner.game.address}")
+                await websocket.send_text(f"ROM NAME{game_owner.game.rom_name}")
+                await thread_member.thread.send(f"{thread_member.name} has joined the game!")
+
+
+@bot.event
+async def on_thread_member_remove(thread_member: discord.ThreadMember):
+    if thread_member.id not in user_map:
+        return
+    # Do nothing if the thread is not a kaillera game thread
+    for game_owner in user_map.values():
+        if (
+            game_owner.game is not None
+            and game_owner.game.thread is not None
+            and thread_member.thread == game_owner.game.thread
+            and user_map[thread_member.id].game is not None
+        ):
+            if thread_member.id in [user.id for user in game_owner.game.players]:
+                user = user_map.get(thread_member.id)
+                websocket = authenticated_connection_manager.active_connections[thread_member.id]
+                await websocket.send_text("LEAVE GAME")
+                if user == user.game.owner:
+                    if user.game.thread is not None:
+                        await user.game.thread.delete()
+                    for _user in user.game.players[:]:
+                        if _user != user:
+                            _user.game = None
+                else:
+                    user.game.players.remove(user)
+                    if user.game.thread is not None:
+                        discord_user = discord.Object(user.id)
+                        await user.game.thread.remove_user(discord_user)
+                    await thread_member.thread.send(f"{thread_member.name} has left the game!")
+
+                user.game = None
 
 
 @bot.user_command(name="Say Hello")
