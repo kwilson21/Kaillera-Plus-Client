@@ -117,6 +117,12 @@ requires_python = ">=3.6"
 summary = "A pure-Python, bring-your-own-I/O implementation of HTTP/1.1"
 
 [[package]]
+name = "hashids"
+version = "1.3.1"
+requires_python = ">=2.7"
+summary = "Implements the hashids algorithm in python. For more information, visit http://hashids.org/"
+
+[[package]]
 name = "honcho"
 version = "1.1.0"
 summary = "Honcho: a Python clone of Foreman. For managing Procfile-based applications."
@@ -165,12 +171,12 @@ version = "2.17.0"
 requires_python = ">=3.6.1"
 summary = "A framework for managing and maintaining multi-language pre-commit hooks."
 dependencies = [
-    "cfgv==3.3.1",
-    "identify==2.4.11",
-    "nodeenv==1.6.0",
+    "cfgv>=2.0.0",
+    "identify>=1.0.0",
+    "nodeenv>=0.11.1",
     "pyyaml>=5.1",
-    "toml==0.10.2",
-    "virtualenv==20.13.2",
+    "toml",
+    "virtualenv>=20.0.8",
 ]
 
 [[package]]
@@ -276,10 +282,10 @@ version = "20.13.2"
 requires_python = "!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,>=2.7"
 summary = "Virtual Python Environment builder"
 dependencies = [
-    "distlib==0.3.4",
-    "filelock==3.6.0",
-    "platformdirs==2.5.1",
-    "six==1.16.0",
+    "distlib<1,>=0.3.1",
+    "filelock<4,>=3.2",
+    "platformdirs<3,>=2",
+    "six<2,>=1.9.0",
 ]
 
 [[package]]
@@ -306,7 +312,7 @@ dependencies = [
 
 [metadata]
 lock_version = "3.1"
-content_hash = "sha256:6482f12a9bfd7337604422f5c3a6bd26063d28b2a7c6f8e8d25a6f8942431cdd"
+content_hash = "sha256:6ff736af5e15dc57c0831e0dcb29f0617734231f92fcbdc318d135464ed20e95"
 
 [metadata.files]
 "aiocache 0.11.1" = [
@@ -406,6 +412,10 @@ content_hash = "sha256:6482f12a9bfd7337604422f5c3a6bd26063d28b2a7c6f8e8d25a6f894
 "h11 0.13.0" = [
     {file = "h11-0.13.0-py3-none-any.whl", hash = "sha256:8ddd78563b633ca55346c8cd41ec0af27d3c79931828beffb46ce70a379e7442"},
     {file = "h11-0.13.0.tar.gz", hash = "sha256:70813c1135087a248a4d38cc0e1a0181ffab2188141a93eaf567940c3957ff06"},
+]
+"hashids 1.3.1" = [
+    {file = "hashids-1.3.1-py2.py3-none-any.whl", hash = "sha256:8bddd1acba501bfc9306e7e5a99a1667f4f2cacdc20cbd70bcc5ddfa5147c94c"},
+    {file = "hashids-1.3.1.tar.gz", hash = "sha256:6c3dc775e65efc2ce2c157a65acb776d634cb814598f406469abef00ae3f635c"},
 ]
 "honcho 1.1.0" = [
     {file = "honcho-1.1.0-py2.py3-none-any.whl", hash = "sha256:a4d6e3a88a7b51b66351ecfc6e9d79d8f4b87351db9ad7e923f5632cc498122f"},

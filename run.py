@@ -13,11 +13,13 @@ from fastapi import FastAPI
 from fastapi import WebSocket
 from fastapi import WebSocketDisconnect
 from fastapi_discord import DiscordOAuthClient
+from hashids import Hashids
 
 MAX_PLAYERS = 4
 
 app = FastAPI()
 bot = discord.Bot(intents=discord.Intents.all())
+hashids = Hashids(salt=os.environ["HASHIDS_SALT"])
 
 discord_oauth_client = DiscordOAuthClient(
     os.environ["DISCORD_CLIENT_ID"],
@@ -148,8 +150,8 @@ async def discord_auth_callback(code: str):
 async def auth_websocket_endpoint(websocket: WebSocket):
     global authenticating_connection_manager
 
-    auth_id = uuid.uuid4().hex
-    await authenticating_connection_manager.connect(websocket, int(auth_id, 16))
+    auth_id = uuid.uuid4().int
+    await authenticating_connection_manager.connect(websocket, auth_id)
     try:
         while True:
             data = await websocket.receive_text()
@@ -163,9 +165,9 @@ async def auth_websocket_endpoint(websocket: WebSocket):
                 )
 
                 await websocket.send_text(f"AUTH URL{oauth_login_url}")
-                await websocket.send_text(f"AUTH ID{auth_id}")
+                await websocket.send_text(f"AUTH ID{hashids.encode(auth_id)}")
     except WebSocketDisconnect:
-        authenticating_connection_manager.disconnect(websocket, int(auth_id, 16))
+        authenticating_connection_manager.disconnect(websocket, auth_id)
 
 
 @app.websocket("/ws/{user_id}")
@@ -183,8 +185,19 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int):
         if user_id in user_map:
             user = user_map.pop(user_id)
             if user.game.thread:
-                await user.game.thread.delete()
+                try:
+                    await user.game.thread.delete()
+                except discord.NotFound:
+                    pass
             del user
+
+
+async def get_user_game_list(ctx: discord.AutocompleteContext):
+    user = user_map.get(ctx.interaction.user.id)
+    if not user:
+        return []
+    else:
+        return user.game_list
 
 
 # Confirmation code
@@ -192,12 +205,14 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int):
 async def cc(ctx: discord.ApplicationContext, auth_id: str):
     global user_map, authenticating_connection_manager
 
+    decoded_auth_id = hashids.decode(auth_id)[0]
+
     if not auth_id:
         await ctx.respond("Please enter a valid auth id")
-    elif int(auth_id, 16) not in authenticating_connection_manager.active_connections:
+    elif decoded_auth_id not in authenticating_connection_manager.active_connections:
         await ctx.respond("User has not been authenticated yet or the time to authenticate has expired, try again")
     else:
-        websocket = authenticating_connection_manager.active_connections.pop(int(auth_id, 16))
+        websocket = authenticating_connection_manager.active_connections.pop(decoded_auth_id)
         await websocket.send_text(f"USER ID{ctx.author.id}")
         await websocket.send_text("AUTH SUCCESS")
         user_map[ctx.author.id].auth_state = AuthState.AUTH_SUCCESS
@@ -211,7 +226,7 @@ async def creategame(
     rom_name: discord.Option(
         str,
         "Enter the name of the ROM you want to play",  # noqa: F722
-        autocomplete=discord.utils.basic_autocomplete(lambda ctx: user_map[ctx.interaction.user.id].game_list),
+        autocomplete=discord.utils.basic_autocomplete(get_user_game_list),
     ),
 ):
     global user_map, authenticated_connection_manager
@@ -224,7 +239,6 @@ async def creategame(
     elif not rom_name or rom_name not in user.game_list:
         await ctx.respond("Please enter a valid ROM name!")
     else:
-        # game_id = uuid.uuid4().hex
         game_id = user.id
         user.game = Game(players=[user], id=game_id, owner=user, rom_name=rom_name)
 
@@ -239,7 +253,7 @@ async def creategame(
 
         websocket = authenticated_connection_manager.active_connections[ctx.author.id]
         await websocket.send_text(f"CREATE GAME{rom_name}")
-        await ctx.respond(f"{ctx.author.mention} has created a game! Rom name: {rom_name} Game ID: {game_id}")
+        await ctx.respond(f"{ctx.author.mention} has created a game! Rom name: {rom_name}")
 
 
 # Leave a game
@@ -264,8 +278,7 @@ async def leavegame(ctx: discord.ApplicationContext):
         else:
             user.game.players.remove(user)
             if user.game.thread is not None:
-                discord_user = discord.Object(user.id)
-                await user.game.thread.remove_user(discord_user)
+                await user.game.thread.remove_user(ctx.author)
 
         user.game = None
         await ctx.respond(f"{ctx.author.mention} has left their game!")
@@ -294,18 +307,29 @@ async def startgame(ctx: discord.ApplicationContext):
 @bot.slash_command()
 async def joingame(
     ctx: discord.ApplicationContext,
-    game_id: discord.Option(
+    username_and_discriminator: discord.Option(
         str,
-        "Enter the game id you want to join",  # noqa: F722
+        "Enter the username (including the # discriminator) you want to join",  # noqa: F722
         autocomplete=discord.utils.basic_autocomplete(
             lambda ctx: [
-                game.id for game in user_map[ctx.interaction.user.id].game_list if game.status != GameStatus.IDLE
+                f"{user.username}#{user.discriminator}"
+                for user in user_map.values()
+                if user.game and user.game.status != GameStatus.IDLE and user.id != ctx.interaction.user.id
             ]
         ),
     ),
 ):
     global user_map, authenticated_connection_manager
-    game_id = int(game_id)
+
+    for user in user_map.values():
+        if f"{user.username}#{user.discriminator}" == username_and_discriminator:
+            game_id = user.game.id
+            break
+    else:
+        await ctx.respond(
+            "This game does not exist! Please make sure you entered the correct username and discriminator"
+        )
+        return
 
     game_owner = user_map.get(game_id)
     user = user_map.get(ctx.author.id)
@@ -318,35 +342,35 @@ async def joingame(
     elif game_owner.game.rom_name not in user.game_list:
         await ctx.respond(f"You do not have own this ROM {game_owner.game.rom_name}!")
     else:
-        websocket = authenticated_connection_manager.active_connections[ctx.author.id]
-        game_owner.game.players.append(user)
-        user.game = game_owner.game
+        if game_owner.game.thread is None:
+            websocket = authenticated_connection_manager.active_connections[ctx.author.id]
+            game_owner.game.players.append(user)
+            user.game = game_owner.game
 
-        await websocket.send_text(f"JOIN GAME{game_owner.game.address}")
-        await websocket.send_text(f"ROM NAME{game_owner.game.rom_name}")
+            await websocket.send_text(f"JOIN GAME{game_owner.game.address}")
+            await websocket.send_text(f"ROM NAME{game_owner.game.rom_name}")
 
-        if game_owner.game.thread is not None:
-            discord_user = discord.Object(user.id)
-            await game_owner.game.thread.add_user(discord_user)
+            await ctx.respond(f"{ctx.author.mention} has joined {game_owner.username}'s game!")
         else:
-            await ctx.respond(f"{ctx.author.mention} has joined game ID {game_id}")
+            await game_owner.game.thread.add_user(ctx.author)
+            # on_thread_member_join hook will add the user to the game
 
 
 @bot.event
 async def on_thread_member_join(thread_member: discord.ThreadMember):
     thread_members = await thread_member.thread.fetch_members()
-    # Users can join normal threads, but not kaillera game threads
+    # Unauthenticated users can join normal threads, but not kaillera game threads
     if thread_member.id not in user_map and all(
         thread_member.id for thread_member in thread_members if thread_member.id in user_map
     ):
-        await thread_member.thread.remove_user(thread_member.id)
+        await thread_member.thread.remove_user(thread_member)
         return
     for game_owner in user_map.values():
         if (
             game_owner.game is not None
             and game_owner.game.thread is not None
             and thread_member.thread == game_owner.game.thread
-            and user_map[thread_member.id].game is None  # This is a hack to make sure the user is not already in a game
+            and user_map[thread_member.id].game is None  # User cannot already be in a game
         ):
             user = user_map.get(thread_member.id)
             if (
@@ -356,7 +380,7 @@ async def on_thread_member_join(thread_member: discord.ThreadMember):
                 or len(game_owner.game.players) > MAX_PLAYERS
             ):
                 # TODO: Send a message to the user with an error
-                await thread_member.thread.remove_user(thread_member.id)
+                await thread_member.thread.remove_user(thread_member)
                 return
 
             if thread_member.id not in [_user.id for _user in game_owner.game.players]:
@@ -366,7 +390,7 @@ async def on_thread_member_join(thread_member: discord.ThreadMember):
 
                 await websocket.send_text(f"JOIN GAME{game_owner.game.address}")
                 await websocket.send_text(f"ROM NAME{game_owner.game.rom_name}")
-                await thread_member.thread.send(f"{thread_member.name} has joined the game!")
+                await thread_member.thread.send(f"{user.username} has joined the game!")
 
 
 @bot.event
@@ -394,9 +418,8 @@ async def on_thread_member_remove(thread_member: discord.ThreadMember):
                 else:
                     user.game.players.remove(user)
                     if user.game.thread is not None:
-                        discord_user = discord.Object(user.id)
-                        await user.game.thread.remove_user(discord_user)
-                    await thread_member.thread.send(f"{thread_member.name} has left the game!")
+                        await user.game.thread.remove_user(thread_member)
+                    await thread_member.thread.send(f"{user.username} has left the game!")
 
                 user.game = None
 
