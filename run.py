@@ -1,5 +1,7 @@
 import asyncio
 import os
+import sys
+import traceback
 import uuid
 from dataclasses import dataclass
 from enum import Enum
@@ -98,18 +100,22 @@ class ConnectionManager:
 
 
 class BaseKailleraGameView(discord.ui.View):
-    async def on_error(self, error, item, interaction):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def on_error(self, error: Exception, item: discord.ui.Item, interaction: discord.Interaction):
         if isinstance(error, KailleraError):
-            await interaction.response.edit_message(content=error.message, view=self)
+            await interaction.response.send_message(content=error.message, ephemeral=True, delete_after=10)
         else:
-            raise error
+            print(f"Ignoring exception in view {self} for item {item}:", file=sys.stderr)
+            traceback.print_exception(error.__class__, error, error.__traceback__, file=sys.stderr)
 
 
 # View passed when a user creates a new game
 class CreatedGameThreadView(BaseKailleraGameView):
     def __init__(self, ctx):
         self.context = ctx
-        super().__init__()
+        super().__init__(timeout=None)
 
     @discord.ui.button(label="Join Game", style=discord.ButtonStyle.primary, custom_id="join_button")
     async def join_game_button_callback(self, button, interaction):
@@ -138,7 +144,7 @@ class CreatedGameThreadView(BaseKailleraGameView):
 
 
 class GameThreadView(BaseKailleraGameView):
-    @discord.ui.button(label="Leave Game", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="Leave Game", style=discord.ButtonStyle.danger, custom_id="leave_button")
     async def leave_game_button_callback(self, button, interaction):
         global user_map, authenticated_connection_manager
 
@@ -166,7 +172,7 @@ class GameThreadView(BaseKailleraGameView):
 
 
 class StartedGameThreadView(GameThreadView):
-    @discord.ui.button(label="Drop Game", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="Drop Game", style=discord.ButtonStyle.danger, custom_id="drop_button")
     async def drop_game_button_callback(self, button, interaction):
         global user_map, authenticated_connection_manager
 
@@ -189,7 +195,7 @@ class StartedGameThreadView(GameThreadView):
 
 
 class JoinedGameThreadView(GameThreadView):
-    @discord.ui.button(label="Start Game", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="Start Game", style=discord.ButtonStyle.success, custom_id="start_button")
     async def start_game_button_callback(self, button, interaction):
         global user_map, authenticated_connection_manager
 
@@ -255,7 +261,7 @@ async def discord_auth_callback(code: str):
                 user = await response.json()
                 discord_user = discord.Object(user["id"])
                 dm_channel = await bot.create_dm(discord_user)
-                await dm_channel.send(dm_msg)
+                await dm_channel.send(dm_msg, delete_after=120)
                 user["id"] = int(user["id"])
                 user_map.update({user["id"]: DiscordUser(**user)})
                 asyncio.create_task(remove_user_if_not_authenticated(user["id"]))
@@ -506,7 +512,7 @@ async def joingame(
 @bot.event
 async def on_application_command_error(ctx: discord.ApplicationContext, error: Exception):
     if isinstance(error, KailleraError):
-        await ctx.respond(error.message)
+        await ctx.respond(error.message, delete_after=5)
     else:
         raise error
 
