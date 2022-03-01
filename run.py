@@ -29,10 +29,14 @@ discord_oauth_client = DiscordOAuthClient(
 )  # scopes
 
 
+class KailleraError(Exception):
+    def __init__(self, message: str):
+        self.message = message
+
+
 class AuthState(Enum):
     NOT_AUTH = 0
     AUTH_SUCCESS = 1
-    AUTH_FAILED = 2
 
 
 class GameStatus(Enum):
@@ -50,6 +54,7 @@ class Game:
     thread: Optional[discord.Thread] = None
     address: Optional[str] = None
     status: GameStatus = GameStatus.IDLE
+    created_game_thread_view: Optional[discord.ui.View] = None
 
 
 @dataclass
@@ -90,6 +95,119 @@ class ConnectionManager:
     async def broadcast(self, message: str):
         for connection in self.active_connections.values():
             await connection.send_text(message)
+
+
+class BaseKailleraGameView(discord.ui.View):
+    async def on_error(self, error, item, interaction):
+        if isinstance(error, KailleraError):
+            await interaction.response.edit_message(content=error.message, view=self)
+        else:
+            raise error
+
+
+# View passed when a user creates a new game
+class CreatedGameThreadView(BaseKailleraGameView):
+    def __init__(self, ctx):
+        self.context = ctx
+        super().__init__()
+
+    @discord.ui.button(label="Join Game", style=discord.ButtonStyle.primary, custom_id="join_button")
+    async def join_game_button_callback(self, button, interaction):
+        global user_map
+
+        game_owner = user_map.get(self.context.author.id)
+        user = user_map.get(interaction.user.id)
+        if not user:
+            raise KailleraError("You must be authenticated to use this command!")
+        elif user.game:
+            raise KailleraError("You are already in a game!")
+        elif not game_owner or not game_owner.game:
+            raise KailleraError("This game does not exist!")
+        elif game_owner.game.rom_name not in user.game_list:
+            raise KailleraError(f"You do not own this ROM {game_owner.game.rom_name}!")
+        elif game_owner.game.status != GameStatus.IDLE:
+            raise KailleraError("The game has already started!")
+        elif len(game_owner.game.players) == MAX_PLAYERS:
+            raise KailleraError("This game is full!")
+        else:
+            if len(game_owner.game.players) == MAX_PLAYERS - 1:
+                button.enabled = False
+            # on_thread_member_join hook will add the user to the game
+            await game_owner.game.thread.add_user(interaction.user)
+            await interaction.response.edit_message(view=self)
+
+
+class GameThreadView(BaseKailleraGameView):
+    @discord.ui.button(label="Leave Game", style=discord.ButtonStyle.danger)
+    async def leave_game_button_callback(self, button, interaction):
+        global user_map, authenticated_connection_manager
+
+        user = user_map.get(interaction.user.id)
+        if not user:
+            raise KailleraError("You must be authenticated to use this command!")
+        elif not user.game:
+            raise KailleraError("You don't have a game to leave!")
+        else:
+            websocket = authenticated_connection_manager.active_connections[interaction.user.id]
+            await websocket.send_text("LEAVE GAME")
+            if user == user.game.owner:
+                if user.game.thread is not None:
+                    await user.game.thread.delete()
+                for _user in user.game.players[:]:
+                    if _user != user:
+                        _user.game = None
+            else:
+                user.game.players.remove(user)
+                if user.game.thread is not None:
+                    await user.game.thread.remove_user(interaction.user)
+
+            user.game = None
+            await interaction.response.send_message(f"{interaction.user.mention} has left the game!")
+
+
+class StartedGameThreadView(GameThreadView):
+    @discord.ui.button(label="Drop Game", style=discord.ButtonStyle.danger)
+    async def drop_game_button_callback(self, button, interaction):
+        global user_map, authenticated_connection_manager
+
+        user = user_map.get(interaction.user.id)
+        if not user:
+            raise KailleraError("You must be authenticated to use this command!")
+        elif not user.game:
+            raise KailleraError("You don't have a game to start!")
+        elif user.game.owner != user:
+            raise KailleraError("You are not the owner of this game!")
+        else:
+            websocket = authenticated_connection_manager.active_connections[interaction.user.id]
+            await websocket.send_text(f"DROP GAME{user.username}")
+            user.game.status = GameStatus.IDLE
+
+            joined_game_thread_view = JoinedGameThreadView()
+            await interaction.response.edit_message(
+                content=f"{interaction.user.mention} has dropped from the game!", view=joined_game_thread_view
+            )
+
+
+class JoinedGameThreadView(GameThreadView):
+    @discord.ui.button(label="Start Game", style=discord.ButtonStyle.success)
+    async def start_game_button_callback(self, button, interaction):
+        global user_map, authenticated_connection_manager
+
+        user = user_map.get(interaction.user.id)
+        if not user:
+            raise KailleraError("You must be authenticated to use this command!")
+        elif not user.game:
+            raise KailleraError("You don't have a game to start!")
+        elif user.game.owner != user:
+            raise KailleraError("You are not the owner of this game!")
+        else:
+            websocket = authenticated_connection_manager.active_connections[interaction.user.id]
+            await websocket.send_text("START GAME")
+            user.game.status = GameStatus.STARTED
+            start_game_thread_view = StartedGameThreadView()
+            await interaction.response.edit_message(
+                content=f"{interaction.user.mention} has started the game!", view=start_game_thread_view
+            )
 
 
 authenticating_connection_manager = ConnectionManager()
@@ -172,8 +290,11 @@ async def auth_websocket_endpoint(websocket: WebSocket):
 
 @app.websocket("/ws/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: int):
-    global authenticated_connection_manager
+    global authenticated_connection_manager, user_map
 
+    user = user_map.get(user_id)
+    if not user:
+        return
     await authenticated_connection_manager.connect(websocket, user_id)
     await websocket.send_text("GAME LIST")
     try:
@@ -182,17 +303,20 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int):
             await process_ws_data(websocket, data, user_id)
     except WebSocketDisconnect:
         authenticated_connection_manager.disconnect(websocket, user_id)
-        if user_id in user_map:
+        if user:
             user = user_map.pop(user_id)
             if user.game.thread:
                 try:
                     await user.game.thread.delete()
                 except discord.NotFound:
                     pass
+                user.game.created_game_thread_view.stop()
+                user.game.created_game_thread_view.clear_items()
             del user
 
 
 async def get_user_game_list(ctx: discord.AutocompleteContext):
+    global user_map
     user = user_map.get(ctx.interaction.user.id)
     if not user:
         return []
@@ -206,16 +330,18 @@ async def cc(ctx: discord.ApplicationContext, auth_id: str):
     global user_map, authenticating_connection_manager
 
     decoded_auth_id = hashids.decode(auth_id)[0]
-
-    if not auth_id:
-        await ctx.respond("Please enter a valid auth id")
+    user = user_map.get(ctx.author.id)
+    if user.auth_state == AuthState.AUTH_SUCCESS:
+        raise KailleraError("User has already been authenticated!")
+    elif not auth_id:
+        raise KailleraError("Please enter a valid auth id")
     elif decoded_auth_id not in authenticating_connection_manager.active_connections:
-        await ctx.respond("User has not been authenticated yet or the time to authenticate has expired, try again")
+        raise KailleraError("User has not been authenticated yet or the time to authenticate has expired, try again")
     else:
         websocket = authenticating_connection_manager.active_connections.pop(decoded_auth_id)
         await websocket.send_text(f"USER ID{ctx.author.id}")
         await websocket.send_text("AUTH SUCCESS")
-        user_map[ctx.author.id].auth_state = AuthState.AUTH_SUCCESS
+        user.auth_state = AuthState.AUTH_SUCCESS
         await ctx.respond("Authentication successful!")
 
 
@@ -233,11 +359,11 @@ async def creategame(
 
     user = user_map.get(ctx.author.id)
     if not user:
-        await ctx.respond("You must be authenticated to use this command!")
+        raise KailleraError("You must be authenticated to use this command!")
     elif user.game:
-        await ctx.respond("You are already in a game!")
+        raise KailleraError("You are already in a game!")
     elif not rom_name or rom_name not in user.game_list:
-        await ctx.respond("Please enter a valid ROM name!")
+        raise KailleraError("Please enter a valid ROM name!")
     else:
         game_id = user.id
         user.game = Game(players=[user], id=game_id, owner=user, rom_name=rom_name)
@@ -249,11 +375,24 @@ async def creategame(
                 name=f"{ctx.author.name} {rom_name}", type=discord.ChannelType.public_thread
             )
             await thread.add_user(ctx.author)
-            user.game.thread = thread
+            joined_game_thread_view = JoinedGameThreadView()
+            await thread.send("Kaillera+ by: Agent 21", view=joined_game_thread_view)
 
-        websocket = authenticated_connection_manager.active_connections[ctx.author.id]
-        await websocket.send_text(f"CREATE GAME{rom_name}")
-        await ctx.respond(f"{ctx.author.mention} has created a game! Rom name: {rom_name}")
+            user.game.thread = thread
+            created_game_thread_view = CreatedGameThreadView(ctx)
+
+            user.game.created_game_thread_view = created_game_thread_view
+
+            websocket = authenticated_connection_manager.active_connections[ctx.author.id]
+            await websocket.send_text(f"CREATE GAME{rom_name}")
+
+            await ctx.respond(
+                f"{ctx.author.mention} has created a game! Rom name: {rom_name}", view=created_game_thread_view
+            )
+        else:
+            websocket = authenticated_connection_manager.active_connections[ctx.author.id]
+            await websocket.send_text(f"CREATE GAME{rom_name}")
+            await ctx.respond(f"{ctx.author.mention} has created a game! Rom name: {rom_name}")
 
 
 # Leave a game
@@ -263,18 +402,26 @@ async def leavegame(ctx: discord.ApplicationContext):
 
     user = user_map.get(ctx.author.id)
     if not user:
-        await ctx.respond("You must be authenticated to use this command!")
+        raise KailleraError("You must be authenticated to use this command!")
     elif not user.game:
-        await ctx.respond("You don't have a game to leave!")
+        raise KailleraError("You don't have a game to leave!")
     else:
         websocket = authenticated_connection_manager.active_connections[ctx.author.id]
         await websocket.send_text("LEAVE GAME")
+
+        if len(user.game.players) == MAX_PLAYERS:
+            for child in user.game.created_game_thread_view.children:
+                if child.custom_id == "join_button":
+                    child.disabled = False
+
         if user == user.game.owner:
             if user.game.thread is not None:
                 await user.game.thread.delete()
+
             for _user in user.game.players[:]:
                 if _user != user:
                     _user.game = None
+
         else:
             user.game.players.remove(user)
             if user.game.thread is not None:
@@ -291,11 +438,11 @@ async def startgame(ctx: discord.ApplicationContext):
 
     user = user_map.get(ctx.author.id)
     if not user:
-        await ctx.respond("You must be authenticated to use this command!")
+        raise KailleraError("You must be authenticated to use this command!")
     elif not user.game:
-        await ctx.respond("You don't have a game to start!")
+        raise KailleraError("You don't have a game to start!")
     elif user.game.owner != user:
-        await ctx.respond("You are not the owner of this game!")
+        raise KailleraError("You are not the owner of this game!")
     else:
         websocket = authenticated_connection_manager.active_connections[ctx.author.id]
         await websocket.send_text("START GAME")
@@ -314,7 +461,7 @@ async def joingame(
             lambda ctx: [
                 f"{user.username}#{user.discriminator}"
                 for user in user_map.values()
-                if user.game and user.game.status != GameStatus.IDLE and user.id != ctx.interaction.user.id
+                if user.game and user.game.status == GameStatus.IDLE and user.id != ctx.interaction.user.id
             ]
         ),
     ),
@@ -326,7 +473,7 @@ async def joingame(
             game_id = user.game.id
             break
     else:
-        await ctx.respond(
+        raise KailleraError(
             "This game does not exist! Please make sure you entered the correct username and discriminator"
         )
         return
@@ -334,13 +481,13 @@ async def joingame(
     game_owner = user_map.get(game_id)
     user = user_map.get(ctx.author.id)
     if not user:
-        await ctx.respond("You must be authenticated to use this command!")
+        raise KailleraError("You must be authenticated to use this command!")
     elif user.game:
-        await ctx.respond("You are already in a game!")
+        raise KailleraError("You are already in a game!")
     elif not game_owner or not game_owner.game:
-        await ctx.respond("This game does not exist!")
+        raise KailleraError("This game does not exist!")
     elif game_owner.game.rom_name not in user.game_list:
-        await ctx.respond(f"You do not have own this ROM {game_owner.game.rom_name}!")
+        raise KailleraError(f"You do not own this ROM {game_owner.game.rom_name}!")
     else:
         if game_owner.game.thread is None:
             websocket = authenticated_connection_manager.active_connections[ctx.author.id]
@@ -357,7 +504,17 @@ async def joingame(
 
 
 @bot.event
+async def on_application_command_error(ctx: discord.ApplicationContext, error: Exception):
+    if isinstance(error, KailleraError):
+        await ctx.respond(error.message)
+    else:
+        raise error
+
+
+@bot.event
 async def on_thread_member_join(thread_member: discord.ThreadMember):
+    global user_map, authenticated_connection_manager
+
     thread_members = await thread_member.thread.fetch_members()
     # Unauthenticated users can join normal threads, but not kaillera game threads
     if thread_member.id not in user_map and all(
@@ -395,6 +552,8 @@ async def on_thread_member_join(thread_member: discord.ThreadMember):
 
 @bot.event
 async def on_thread_member_remove(thread_member: discord.ThreadMember):
+    global user_map, authenticated_connection_manager
+
     if thread_member.id not in user_map:
         return
     # Do nothing if the thread is not a kaillera game thread
@@ -417,8 +576,6 @@ async def on_thread_member_remove(thread_member: discord.ThreadMember):
                             _user.game = None
                 else:
                     user.game.players.remove(user)
-                    if user.game.thread is not None:
-                        await user.game.thread.remove_user(thread_member)
                     await thread_member.thread.send(f"{user.username} has left the game!")
 
                 user.game = None
