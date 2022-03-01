@@ -348,7 +348,7 @@ async def cc(ctx: discord.ApplicationContext, auth_id: str):
         await websocket.send_text(f"USER ID{ctx.author.id}")
         await websocket.send_text("AUTH SUCCESS")
         user.auth_state = AuthState.AUTH_SUCCESS
-        await ctx.respond("Authentication successful!")
+        await ctx.respond("Authentication successful!", delete_after=30)
 
 
 # Create a game
@@ -434,7 +434,7 @@ async def leavegame(ctx: discord.ApplicationContext):
                 await user.game.thread.remove_user(ctx.author)
 
         user.game = None
-        await ctx.respond(f"{ctx.author.mention} has left their game!")
+        await ctx.respond(f"{ctx.author.mention} has left their game!", delete_after=30)
 
 
 # Start game
@@ -587,9 +587,9 @@ async def on_thread_member_remove(thread_member: discord.ThreadMember):
                 user.game = None
 
 
-@bot.user_command(name="Say Hello")
-async def hi(ctx, user):
-    await ctx.respond(f"{ctx.author.mention} says hello to {user.name}!")
+# @bot.user_command(name="Say Hello")
+# async def hi(ctx, user):
+#     await ctx.respond(f"{ctx.author.mention} says hello to {user.name}!")
 
 
 async def run_bot():
