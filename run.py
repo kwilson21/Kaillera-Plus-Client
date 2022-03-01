@@ -105,7 +105,7 @@ class BaseKailleraGameView(discord.ui.View):
 
     async def on_error(self, error: Exception, item: discord.ui.Item, interaction: discord.Interaction):
         if isinstance(error, KailleraError):
-            await interaction.response.send_message(content=error.message, ephemeral=True, delete_after=10)
+            await interaction.response.send_message(content=error.message, ephemeral=True, delete_after=3.0)
         else:
             print(f"Ignoring exception in view {self} for item {item}:", file=sys.stderr)
             traceback.print_exception(error.__class__, error, error.__traceback__, file=sys.stderr)
@@ -261,7 +261,7 @@ async def discord_auth_callback(code: str):
                 user = await response.json()
                 discord_user = discord.Object(user["id"])
                 dm_channel = await bot.create_dm(discord_user)
-                await dm_channel.send(dm_msg, delete_after=120)
+                await dm_channel.send(dm_msg, delete_after=120.0)
                 user["id"] = int(user["id"])
                 user_map.update({user["id"]: DiscordUser(**user)})
                 asyncio.create_task(remove_user_if_not_authenticated(user["id"]))
@@ -348,7 +348,7 @@ async def cc(ctx: discord.ApplicationContext, auth_id: str):
         await websocket.send_text(f"USER ID{ctx.author.id}")
         await websocket.send_text("AUTH SUCCESS")
         user.auth_state = AuthState.AUTH_SUCCESS
-        await ctx.respond("Authentication successful!", delete_after=30)
+        await ctx.respond("Authentication successful!", delete_after=10.0)
 
 
 # Create a game
@@ -434,7 +434,7 @@ async def leavegame(ctx: discord.ApplicationContext):
                 await user.game.thread.remove_user(ctx.author)
 
         user.game = None
-        await ctx.respond(f"{ctx.author.mention} has left their game!", delete_after=30)
+        await ctx.respond(f"{ctx.author.mention} has left their game!", delete_after=10.0)
 
 
 # Start game
@@ -512,7 +512,7 @@ async def joingame(
 @bot.event
 async def on_application_command_error(ctx: discord.ApplicationContext, error: Exception):
     if isinstance(error, KailleraError):
-        await ctx.respond(error.message, delete_after=5)
+        await ctx.respond(error.message, delete_after=5.0)
     else:
         raise error
 
