@@ -115,7 +115,7 @@ class BaseKailleraGameView(discord.ui.View):
 class CreatedGameThreadView(BaseKailleraGameView):
     def __init__(self, ctx):
         self.context = ctx
-        super().__init__(timeout=None)
+        super().__init__()
 
     @discord.ui.button(label="Join Game", style=discord.ButtonStyle.primary, custom_id="join_button")
     async def join_game_button_callback(self, button, interaction):
