@@ -308,6 +308,12 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int):
             data = await websocket.receive_text()
             await process_ws_data(websocket, data, user_id)
     except WebSocketDisconnect:
+        disconnected_msg = (
+            "Your emulator has disconnected from the server, you must reauthenticate to create and join games!"
+        )
+        discord_user = discord.Object(user.id)
+        dm_channel = await bot.create_dm(discord_user)
+        await dm_channel.send(disconnected_msg, delete_after=15.0)
         authenticated_connection_manager.disconnect(websocket, user_id)
         if user:
             user = user_map.pop(user_id)
@@ -348,7 +354,7 @@ async def cc(ctx: discord.ApplicationContext, auth_id: str):
         await websocket.send_text(f"USER ID{ctx.author.id}")
         await websocket.send_text("AUTH SUCCESS")
         user.auth_state = AuthState.AUTH_SUCCESS
-        await ctx.respond("Authentication successful!", delete_after=10.0)
+        await ctx.respond("Authentication successful!", delete_after=5.0)
 
 
 # Create a game
