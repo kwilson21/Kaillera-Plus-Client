@@ -57,6 +57,7 @@ class Game:
     address: Optional[str] = None
     status: GameStatus = GameStatus.IDLE
     created_game_thread_view: Optional[discord.ui.View] = None
+    create_game_interaction: Optional[discord.Interaction] = None
 
 
 @dataclass
@@ -137,7 +138,7 @@ class CreatedGameThreadView(BaseKailleraGameView):
             raise KailleraError("This game is full!")
         else:
             if len(game_owner.game.players) == MAX_PLAYERS - 1:
-                button.enabled = False
+                button.disabled = True
             # on_thread_member_join hook will add the user to the game
             await game_owner.game.thread.add_user(interaction.user)
             await interaction.response.edit_message(view=self)
@@ -159,6 +160,8 @@ class GameThreadView(BaseKailleraGameView):
             if user == user.game.owner:
                 if user.game.thread is not None:
                     await user.game.thread.delete()
+                if user.game.create_game_interaction is not None:
+                    await user.game.create_game_interaction.edit_original_message(view=None)
                 for _user in user.game.players[:]:
                     if _user != user:
                         _user.game = None
@@ -324,6 +327,8 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int):
                     pass
                 user.game.created_game_thread_view.stop()
                 user.game.created_game_thread_view.clear_items()
+            if user.game.create_game_interaction is not None:
+                await user.game.create_game_interaction.edit_original_message(view=None)
             del user
 
 
@@ -398,7 +403,7 @@ async def creategame(
             websocket = authenticated_connection_manager.active_connections[ctx.author.id]
             await websocket.send_text(f"CREATE GAME{rom_name}")
 
-            await ctx.respond(
+            user.game.create_game_interaction = await ctx.respond(
                 f"{ctx.author.mention} has created a game! Rom name: {rom_name}", view=created_game_thread_view
             )
         else:
