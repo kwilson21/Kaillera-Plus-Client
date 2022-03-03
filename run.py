@@ -337,7 +337,7 @@ async def get_user_game_list(ctx: discord.AutocompleteContext):
 
 
 # Confirmation code
-@bot.slash_command()
+@bot.slash_command(description="Enter the confirmation code from your kaillera client")
 async def cc(ctx: discord.ApplicationContext, auth_id: str):
     global user_map, authenticating_connection_manager
 
@@ -358,7 +358,7 @@ async def cc(ctx: discord.ApplicationContext, auth_id: str):
 
 
 # Create a game
-@bot.slash_command()
+@bot.slash_command(description="Create a game")
 async def creategame(
     ctx: discord.ApplicationContext,
     rom_name: discord.Option(
@@ -408,7 +408,7 @@ async def creategame(
 
 
 # Leave a game
-@bot.slash_command()
+@bot.slash_command(description="Leave a game")
 async def leavegame(ctx: discord.ApplicationContext):
     global user_map, authenticated_connection_manager
 
@@ -444,7 +444,7 @@ async def leavegame(ctx: discord.ApplicationContext):
 
 
 # Start game
-@bot.slash_command()
+@bot.slash_command(description="Start a game")
 async def startgame(ctx: discord.ApplicationContext):
     global user_map, authenticated_connection_manager
 
@@ -463,7 +463,7 @@ async def startgame(ctx: discord.ApplicationContext):
 
 
 # Join a game
-@bot.slash_command()
+@bot.slash_command(description="Join a game")
 async def joingame(
     ctx: discord.ApplicationContext,
     username_and_discriminator: discord.Option(
