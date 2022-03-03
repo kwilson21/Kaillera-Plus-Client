@@ -43,8 +43,7 @@ class AuthState(Enum):
 
 class GameStatus(Enum):
     IDLE = 0
-    STARTED = 1
-    PLAYING = 2
+    PLAYING = 1
 
 
 @dataclass
@@ -212,7 +211,7 @@ class JoinedGameThreadView(GameThreadView):
         else:
             websocket = authenticated_connection_manager.active_connections[interaction.user.id]
             await websocket.send_text("START GAME")
-            user.game.status = GameStatus.STARTED
+            user.game.status = GameStatus.PLAYING
             start_game_thread_view = StartedGameThreadView()
             await interaction.response.edit_message(
                 content=f"{interaction.user.mention} has started the game!", view=start_game_thread_view
@@ -463,7 +462,7 @@ async def startgame(ctx: discord.ApplicationContext):
     else:
         websocket = authenticated_connection_manager.active_connections[ctx.author.id]
         await websocket.send_text("START GAME")
-        user.game.status = GameStatus.STARTED
+        user.game.status = GameStatus.PLAYING
         await ctx.respond(f"{ctx.author.mention} has started the game!")
 
 
