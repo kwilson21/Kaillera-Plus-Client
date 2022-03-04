@@ -11,6 +11,11 @@ from typing import Optional
 
 import aiohttp
 import discord
+from discord.ext.commands import BadArgument
+from discord.ext.commands import dm_only
+from discord.ext.commands import guild_only
+from discord.ext.commands import NoPrivateMessage
+from discord.ext.commands import PrivateMessageOnly
 from fastapi import FastAPI
 from fastapi import WebSocket
 from fastapi import WebSocketDisconnect
@@ -57,6 +62,7 @@ class Game:
     status: GameStatus = GameStatus.IDLE
     created_game_thread_view: Optional[discord.ui.View] = None
     create_game_interaction: Optional[discord.Interaction] = None
+    game_info_message: Optional[discord.Message] = None
 
 
 @dataclass
@@ -77,6 +83,11 @@ class DiscordUser:
     game: Optional[Game] = None
     game_list: List[str] = None
     premium_type: Optional[int] = None
+    # Set after creating a game
+    ping: Optional[int] = None
+    # Set after starting a game
+    player_number: Optional[int] = None
+    frame_delay: Optional[int] = None
 
 
 class ConnectionManager:
@@ -105,7 +116,7 @@ class BaseKailleraGameView(discord.ui.View):
 
     async def on_error(self, error: Exception, item: discord.ui.Item, interaction: discord.Interaction):
         if isinstance(error, KailleraError):
-            await interaction.response.send_message(content=error.message, ephemeral=True, delete_after=3.0)
+            await interaction.response.send_message(content=error.message, ephemeral=True, delete_after=10.0)
         else:
             print(f"Ignoring exception in view {self} for item {item}:", file=sys.stderr)
             traceback.print_exception(error.__class__, error, error.__traceback__, file=sys.stderr)
@@ -192,7 +203,9 @@ class StartedGameThreadView(GameThreadView):
 
             joined_game_thread_view = JoinedGameThreadView()
             await interaction.response.edit_message(
-                content=f"{interaction.user.mention} has dropped from the game!", view=joined_game_thread_view
+                content=f"{interaction.user.mention} has dropped from the game!",
+                view=joined_game_thread_view,
+                embed=None,
             )
 
 
@@ -211,10 +224,19 @@ class JoinedGameThreadView(GameThreadView):
         else:
             websocket = authenticated_connection_manager.active_connections[interaction.user.id]
             await websocket.send_text("START GAME")
+
             user.game.status = GameStatus.PLAYING
-            start_game_thread_view = StartedGameThreadView()
-            await interaction.response.edit_message(
-                content=f"{interaction.user.mention} has started the game!", view=start_game_thread_view
+            embed = discord.Embed(title="Game Info", color=discord.Color.random())
+            embed.add_field(
+                name="Ping", value="\n".join(f"**{player.username}** {player.ping}ms" for player in user.game.players)
+            )
+            embed.add_field(
+                name="Frame Delay",
+                value="\n".join(f"**{player.username}** {player.frame_delay}" for player in user.game.players),
+            )
+            # start_game_thread_view = StartedGameThreadView()
+            user.game.game_info_message = await user.game.thread.send(
+                content=f"{interaction.user.mention} has started the game!", embed=embed
             )
 
 
@@ -234,8 +256,27 @@ async def process_ws_data(websocket: WebSocket, data: str, user_id: int):
         user.game_list = data[9:].split(",")
     elif data.startswith("SERVER IP"):
         user.game.address = data[9:]
-    elif data.startswith("DROP"):
-        pass
+    elif data.startswith("PLAYER NUMBER"):
+        user.player_number = int(data[13:])
+        print(f"{user.username} is player number {user.player_number}")
+    elif data.startswith("FRAME DELAY"):
+        user.frame_delay = int(data[11:])
+        print(f"{user.username} has frame delay {user.frame_delay}")
+    elif data.startswith("USER PING"):
+        user.ping = int(data[9:])
+        print(f"{user.username} has ping {user.ping}")
+
+    if user.game is not None and user.game.game_info_message is not None:
+        embed = user.game.game_info_message.embeds[0]
+        embed.clear_fields()
+        embed.add_field(
+            name="Ping", value="\n".join(f"**{player.username}** {player.ping}ms" for player in user.game.players)
+        )
+        embed.add_field(
+            name="Frame Delay",
+            value="\n".join(f"**{player.username}** {player.frame_delay}" for player in user.game.players),
+        )
+        await user.game.game_info_message.edit(embed=embed)
 
 
 async def remove_user_if_not_authenticated(user_id: int):
@@ -266,7 +307,7 @@ async def discord_auth_callback(code: str):
                 await dm_channel.send(dm_msg, delete_after=120.0)
                 user["id"] = int(user["id"])
                 user_map.update({user["id"]: DiscordUser(**user)})
-                asyncio.create_task(remove_user_if_not_authenticated(user["id"]))
+                bot.loop.create_task(remove_user_if_not_authenticated(user["id"]))
     except aiohttp.client_exceptions.ClientError as e:
         raise e
     return "Login Successful! You may now close this window."
@@ -342,10 +383,15 @@ async def get_user_game_list(ctx: discord.AutocompleteContext):
 
 # Confirmation code
 @bot.slash_command(description="Enter the confirmation code from your kaillera client")
+@dm_only()
 async def cc(ctx: discord.ApplicationContext, auth_id: str):
     global user_map, authenticating_connection_manager
 
-    decoded_auth_id = hashids.decode(auth_id)[0]
+    try:
+        decoded_auth_id = hashids.decode(auth_id)[0]
+    except (IndexError, ValueError):
+        raise BadArgument("Invalid authentication code")
+
     user = user_map.get(ctx.author.id)
     if user.auth_state == AuthState.AUTH_SUCCESS:
         raise KailleraError("User has already been authenticated!")
@@ -358,11 +404,12 @@ async def cc(ctx: discord.ApplicationContext, auth_id: str):
         await websocket.send_text(f"USER ID{ctx.author.id}")
         await websocket.send_text("AUTH SUCCESS")
         user.auth_state = AuthState.AUTH_SUCCESS
-        await ctx.respond("Authentication successful!", delete_after=5.0)
+        await ctx.respond("Authentication successful!", delete_after=120.0)
 
 
 # Create a game
 @bot.slash_command(description="Create a game")
+@guild_only()
 async def creategame(
     ctx: discord.ApplicationContext,
     rom_name: discord.Option(
@@ -413,6 +460,7 @@ async def creategame(
 
 # Leave a game
 @bot.slash_command(description="Leave a game")
+@guild_only()
 async def leavegame(ctx: discord.ApplicationContext):
     global user_map, authenticated_connection_manager
 
@@ -444,11 +492,11 @@ async def leavegame(ctx: discord.ApplicationContext):
                 await user.game.thread.remove_user(ctx.author)
 
         user.game = None
-        await ctx.respond(f"{ctx.author.mention} has left their game!", delete_after=10.0)
 
 
 # Start game
 @bot.slash_command(description="Start a game")
+@guild_only()
 async def startgame(ctx: discord.ApplicationContext):
     global user_map, authenticated_connection_manager
 
@@ -459,15 +507,32 @@ async def startgame(ctx: discord.ApplicationContext):
         raise KailleraError("You don't have a game to start!")
     elif user.game.owner != user:
         raise KailleraError("You are not the owner of this game!")
+    elif user.game.status is GameStatus.PLAYING:
+        raise KailleraError("Game has already started!")
+    elif user.game.thread is None:
+        raise KailleraError("Game thread has not been created!")
+    elif ctx.channel != user.game.thread or ctx.channel.id != user.game.thread.id:
+        raise KailleraError("You must be in the game thread to start the game!")
     else:
         websocket = authenticated_connection_manager.active_connections[ctx.author.id]
         await websocket.send_text("START GAME")
         user.game.status = GameStatus.PLAYING
-        await ctx.respond(f"{ctx.author.mention} has started the game!")
+        embed = discord.Embed(title="Game Info", color=discord.Color.green())
+        embed.add_field(
+            name="Ping", value="\n".join(f"**{player.username}** {player.ping}ms" for player in user.game.players)
+        )
+        embed.add_field(
+            name="Frame Delay",
+            value="\n".join(f"**{player.username}** {player.frame_delay}" for player in user.game.players),
+        )
+        user.game.game_info_message = await user.game.thread.send(
+            f"{ctx.author.mention} has started the game!", embed=embed
+        )
 
 
 # Join a game
 @bot.slash_command(description="Join a game")
+@guild_only()
 async def joingame(
     ctx: discord.ApplicationContext,
     username_and_discriminator: discord.Option(
@@ -521,8 +586,16 @@ async def joingame(
 
 @bot.event
 async def on_application_command_error(ctx: discord.ApplicationContext, error: Exception):
-    if isinstance(error, KailleraError):
-        await ctx.respond(error.message, delete_after=5.0)
+    if isinstance(error, discord.ApplicationCommandInvokeError):
+        await ctx.interaction.response.send_message(content=str(error.original), delete_after=10.0, ephemeral=True)
+    elif isinstance(error, NoPrivateMessage):
+        await ctx.interaction.response.send_message(
+            content="This command cannot be used in private messages.", delete_after=10.0, ephemeral=True
+        )
+    elif isinstance(error, PrivateMessageOnly):
+        await ctx.interaction.response.send_message(
+            content="This command can only be used in private messages.", delete_after=10.0, ephemeral=True
+        )
     else:
         raise error
 
