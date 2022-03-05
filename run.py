@@ -193,9 +193,7 @@ class StartedGameThreadView(GameThreadView):
         if not user:
             raise KailleraError("You must be authenticated to use this command!")
         elif not user.game:
-            raise KailleraError("You don't have a game to start!")
-        elif user.game.owner != user:
-            raise KailleraError("You are not the owner of this game!")
+            raise KailleraError("You don't have a game to drop!")
         else:
             websocket = authenticated_connection_manager.active_connections[interaction.user.id]
             await websocket.send_text(f"DROP GAME{user.username}")
@@ -220,7 +218,7 @@ class JoinedGameThreadView(GameThreadView):
         elif not user.game:
             raise KailleraError("You don't have a game to start!")
         elif user.game.owner != user:
-            raise KailleraError("You are not the owner of this game!")
+            raise KailleraError("You must be the owner of this game to start it!")
         else:
             websocket = authenticated_connection_manager.active_connections[interaction.user.id]
             await websocket.send_text("START GAME")
@@ -234,9 +232,10 @@ class JoinedGameThreadView(GameThreadView):
                 name="Frame Delay",
                 value="\n".join(f"**{player.username}** {player.frame_delay}" for player in user.game.players),
             )
-            # start_game_thread_view = StartedGameThreadView()
-            user.game.game_info_message = await user.game.thread.send(
-                content=f"{interaction.user.mention} has started the game!", embed=embed
+            user.game.game_info_message = interaction.message
+            start_game_thread_view = StartedGameThreadView()
+            await interaction.response.edit_message(
+                content=f"{interaction.user.mention} has started the game!", view=start_game_thread_view, embed=embed
             )
 
 
@@ -266,7 +265,7 @@ async def process_ws_data(websocket: WebSocket, data: str, user_id: int):
         user.ping = int(data[9:])
         print(f"{user.username} has ping {user.ping}")
 
-    if user.game is not None and user.game.game_info_message is not None:
+    if user.game is not None and user.game.game_info_message is not None and user.game.game_info_message.embeds:
         embed = user.game.game_info_message.embeds[0]
         embed.clear_fields()
         embed.add_field(
@@ -292,7 +291,7 @@ async def remove_user_if_not_authenticated(user_id: int):
 async def discord_auth_callback(code: str):
     global user_map
 
-    dm_msg = "Use the /cc command to enter the authentication code from your kaillera client"
+    dm_msg = "Use the /auth command to enter the authentication code from your kaillera client"
     token, _ = await discord_oauth_client.get_access_token(code)
 
     payload = {"Authorization": f"Bearer {token}"}
@@ -384,7 +383,7 @@ async def get_user_game_list(ctx: discord.AutocompleteContext):
 # Confirmation code
 @bot.slash_command(description="Enter the confirmation code from your kaillera client")
 @dm_only()
-async def cc(ctx: discord.ApplicationContext, auth_id: str):
+async def auth(ctx: discord.ApplicationContext, auth_id: str):
     global user_map, authenticating_connection_manager
 
     try:
