@@ -383,7 +383,10 @@ async def get_user_game_list(ctx: discord.AutocompleteContext):
 # Confirmation code
 @bot.slash_command(description="Enter the confirmation code from your kaillera client")
 @dm_only()
-async def auth(ctx: discord.ApplicationContext, auth_id: str):
+async def auth(
+    ctx: discord.ApplicationContext,
+    auth_id: discord.Option(str, description="The confirmation code from your kaillera client"),  # noqa: F722
+):
     global user_map, authenticating_connection_manager
 
     try:
@@ -534,29 +537,28 @@ async def startgame(ctx: discord.ApplicationContext):
 @guild_only()
 async def joingame(
     ctx: discord.ApplicationContext,
-    username_and_discriminator: discord.Option(
-        str,
-        "Enter the username (including the # discriminator) you want to join",  # noqa: F722
-        autocomplete=discord.utils.basic_autocomplete(
-            lambda ctx: [
-                f"{user.username}#{user.discriminator}"
-                for user in user_map.values()
-                if user.game and user.game.status == GameStatus.IDLE and user.id != ctx.interaction.user.id
-            ]
-        ),
+    host: discord.Option(
+        discord.Member,
+        "Select the user who's game you want to join",  # noqa: F722
+        # autocomplete=discord.utils.basic_autocomplete(
+        #     lambda ctx: [
+        #         discord.Object(id=user.id)
+        #         for user in user_map.values()
+        #         if user.game and user.game.status == GameStatus.IDLE and user.id != ctx.interaction.user.id
+        #     ]
+        # ),
     ),
 ):
     global user_map, authenticated_connection_manager
 
     for user in user_map.values():
-        if f"{user.username}#{user.discriminator}" == username_and_discriminator:
+        if host.id == user.id:
             game_id = user.game.id
             break
     else:
         raise KailleraError(
             "This game does not exist! Please make sure you entered the correct username and discriminator"
         )
-        return
 
     game_owner = user_map.get(game_id)
     user = user_map.get(ctx.author.id)
@@ -577,7 +579,7 @@ async def joingame(
             await websocket.send_text(f"JOIN GAME{game_owner.game.address}")
             await websocket.send_text(f"ROM NAME{game_owner.game.rom_name}")
 
-            await ctx.respond(f"{ctx.author.mention} has joined {game_owner.username}'s game!")
+            await ctx.respond(f"{ctx.author.mention} has joined {host.mention}'s game!", delete_after=10.0)
         else:
             await game_owner.game.thread.add_user(ctx.author)
             # on_thread_member_join hook will add the user to the game
