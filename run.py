@@ -359,15 +359,15 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int):
         authenticated_connection_manager.disconnect(websocket, user_id)
         if user:
             user = user_map.pop(user_id)
-            if user.game.thread:
+            if user.game is not None and user.game.thread is not None and user == user.game.owner:
                 try:
                     await user.game.thread.delete()
                 except discord.NotFound:
                     pass
                 user.game.created_game_thread_view.stop()
                 user.game.created_game_thread_view.clear_items()
-            if user.game.create_game_interaction is not None:
-                await user.game.create_game_interaction.edit_original_message(view=None)
+                if user.game.create_game_interaction is not None:
+                    await user.game.create_game_interaction.edit_original_message(view=None)
             del user
 
 
@@ -509,7 +509,7 @@ async def startgame(ctx: discord.ApplicationContext):
         raise KailleraError("You don't have a game to start!")
     elif user.game.owner != user:
         raise KailleraError("You are not the owner of this game!")
-    elif user.game.status is GameStatus.PLAYING:
+    elif user.game.status == GameStatus.PLAYING:
         raise KailleraError("Game has already started!")
     elif user.game.thread is None:
         raise KailleraError("Game thread has not been created!")
@@ -669,6 +669,7 @@ async def on_thread_member_remove(thread_member: discord.ThreadMember):
                     await thread_member.thread.send(f"{user.username} has left the game!")
 
                 user.game = None
+                return
 
 
 # @bot.user_command(name="Say Hello")
