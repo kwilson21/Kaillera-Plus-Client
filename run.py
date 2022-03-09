@@ -239,12 +239,12 @@ class JoinedGameThreadView(GameThreadView):
             )
 
 
-authenticating_connection_manager = ConnectionManager()
-authenticated_connection_manager = ConnectionManager()
+authenticating_connection_manager: ConnectionManager = ConnectionManager()
+authenticated_connection_manager: ConnectionManager = ConnectionManager()
 user_map: Dict[int, DiscordUser] = {}
 
 
-async def process_ws_data(websocket: WebSocket, data: str, user_id: int):
+async def process_ws_data(websocket: WebSocket, data: str, user_id: int) -> None:
     global user_map, authenticated_connection_manager
 
     user = user_map[user_id]
@@ -278,7 +278,7 @@ async def process_ws_data(websocket: WebSocket, data: str, user_id: int):
         await user.game.game_info_message.edit(embed=embed)
 
 
-async def remove_user_if_not_authenticated(user_id: int):
+async def remove_user_if_not_authenticated(user_id: int) -> None:
     global user_map
     # User has 2 minutes to enter confirmation code
     await asyncio.sleep(120)
@@ -288,7 +288,7 @@ async def remove_user_if_not_authenticated(user_id: int):
 
 
 @app.get("/callback")
-async def discord_auth_callback(code: str):
+async def discord_auth_callback(code: str) -> str:
     global user_map
 
     dm_msg = "Use the /auth command to enter the authentication code from your kaillera client"
@@ -313,7 +313,7 @@ async def discord_auth_callback(code: str):
 
 
 @app.websocket("/ws/auth")
-async def auth_websocket_endpoint(websocket: WebSocket):
+async def auth_websocket_endpoint(websocket: WebSocket) -> None:
     global authenticating_connection_manager
 
     auth_id = uuid.uuid4().int
@@ -337,7 +337,7 @@ async def auth_websocket_endpoint(websocket: WebSocket):
 
 
 @app.websocket("/ws/{user_id}")
-async def websocket_endpoint(websocket: WebSocket, user_id: int):
+async def websocket_endpoint(websocket: WebSocket, user_id: int) -> None:
     global authenticated_connection_manager, user_map
 
     user = user_map.get(user_id)
@@ -371,7 +371,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int):
             del user
 
 
-async def get_user_game_list(ctx: discord.AutocompleteContext):
+async def get_user_game_list(ctx: discord.AutocompleteContext) -> List[str]:
     global user_map
     user = user_map.get(ctx.interaction.user.id)
     if not user:
@@ -386,7 +386,7 @@ async def get_user_game_list(ctx: discord.AutocompleteContext):
 async def auth(
     ctx: discord.ApplicationContext,
     auth_id: discord.Option(str, description="The confirmation code from your kaillera client"),  # noqa: F722
-):
+) -> None:
     global user_map, authenticating_connection_manager
 
     try:
@@ -419,7 +419,7 @@ async def creategame(
         "Enter the name of the ROM you want to play",  # noqa: F722
         autocomplete=discord.utils.basic_autocomplete(get_user_game_list),
     ),
-):
+) -> None:
     global user_map, authenticated_connection_manager
 
     user = user_map.get(ctx.author.id)
@@ -463,7 +463,7 @@ async def creategame(
 # Leave a game
 @bot.slash_command(description="Leave a game")
 @guild_only()
-async def leavegame(ctx: discord.ApplicationContext):
+async def leavegame(ctx: discord.ApplicationContext) -> None:
     global user_map, authenticated_connection_manager
 
     user = user_map.get(ctx.author.id)
@@ -499,7 +499,7 @@ async def leavegame(ctx: discord.ApplicationContext):
 # Start game
 @bot.slash_command(description="Start a game")
 @guild_only()
-async def startgame(ctx: discord.ApplicationContext):
+async def startgame(ctx: discord.ApplicationContext) -> None:
     global user_map, authenticated_connection_manager
 
     user = user_map.get(ctx.author.id)
@@ -548,7 +548,7 @@ async def joingame(
         #     ]
         # ),
     ),
-):
+) -> None:
     global user_map, authenticated_connection_manager
 
     for user in user_map.values():
@@ -586,7 +586,7 @@ async def joingame(
 
 
 @bot.event
-async def on_application_command_error(ctx: discord.ApplicationContext, error: Exception):
+async def on_application_command_error(ctx: discord.ApplicationContext, error: Exception) -> None:
     if isinstance(error, discord.ApplicationCommandInvokeError):
         await ctx.interaction.response.send_message(content=str(error.original), delete_after=10.0, ephemeral=True)
     elif isinstance(error, NoPrivateMessage):
@@ -602,7 +602,7 @@ async def on_application_command_error(ctx: discord.ApplicationContext, error: E
 
 
 @bot.event
-async def on_thread_member_join(thread_member: discord.ThreadMember):
+async def on_thread_member_join(thread_member: discord.ThreadMember) -> None:
     global user_map, authenticated_connection_manager
 
     thread_members = await thread_member.thread.fetch_members()
@@ -641,7 +641,7 @@ async def on_thread_member_join(thread_member: discord.ThreadMember):
 
 
 @bot.event
-async def on_thread_member_remove(thread_member: discord.ThreadMember):
+async def on_thread_member_remove(thread_member: discord.ThreadMember) -> None:
     global user_map, authenticated_connection_manager
 
     if thread_member.id not in user_map:
@@ -677,8 +677,11 @@ async def on_thread_member_remove(thread_member: discord.ThreadMember):
 #     await ctx.respond(f"{ctx.author.mention} says hello to {user.name}!")
 
 
-async def run_bot():
-    await bot.start(token=os.environ["DISCORD_TOKEN"])
+async def run_bot() -> None:
+    try:
+        await bot.start(token=os.environ["DISCORD_TOKEN"])
+    except KeyboardInterrupt:
+        await bot.close()
 
 
 asyncio.create_task(run_bot())
