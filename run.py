@@ -4,10 +4,8 @@ import sys
 import traceback
 import uuid
 from dataclasses import dataclass
+from dataclasses import field
 from enum import Enum
-from typing import Dict
-from typing import List
-from typing import Optional
 
 import aiohttp
 import discord
@@ -53,46 +51,48 @@ class GameStatus(Enum):
 
 @dataclass
 class Game:
-    players: List["DiscordUser"]
+    players: list["DiscordUser"]
     id: int  # noqa: A003
     owner: "DiscordUser"
     rom_name: str
-    thread: Optional[discord.Thread] = None
-    address: Optional[str] = None
+    thread: discord.Thread | None = None
+    address: str | None = None
     status: GameStatus = GameStatus.IDLE
-    created_game_thread_view: Optional[discord.ui.View] = None
-    create_game_interaction: Optional[discord.Interaction] = None
-    game_info_message: Optional[discord.Message] = None
+    created_game_thread_view: discord.ui.View | None = None
+    create_game_interaction: discord.Interaction | None = None
+    game_info_message: discord.Message | None = None
 
 
 @dataclass
 class DiscordUser:
     id: int  # noqa: A003
     username: str
+    display_name: str
     discriminator: str
     avatar: str
     mfa_enabled: bool
     locale: str
     flags: int
     public_flags: int
-    banner: Optional[str] = None
-    banner_color: Optional[str] = None
-    accent_color: Optional[str] = None
-    email: Optional[str] = None
-    auth_state: Optional[AuthState] = AuthState.NOT_AUTH
-    game: Optional[Game] = None
-    game_list: List[str] = None
-    premium_type: Optional[int] = None
+    avatar_decoration: str | None = None
+    banner: str | None = None
+    banner_color: str | None = None
+    accent_color: str | None = None
+    email: str | None = None
+    auth_state: AuthState = AuthState.NOT_AUTH
+    game: Game | None = None
+    game_list: list[str] = field(default_factory=list)
+    premium_type: int | None = None
     # Set after creating a game
-    ping: Optional[int] = None
+    ping: int | None = None
     # Set after starting a game
-    player_number: Optional[int] = None
-    frame_delay: Optional[int] = None
+    player_number: int | None = None
+    frame_delay: int | None = None
 
 
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: Dict[int, WebSocket] = {}
+        self.active_connections: dict[int, WebSocket] = {}
 
     async def connect(self, websocket: WebSocket, identifier: int):
         await websocket.accept()
@@ -147,9 +147,12 @@ class CreatedGameThreadView(BaseKailleraGameView):
         elif len(game_owner.game.players) == MAX_PLAYERS:
             raise KailleraError("This game is full!")
         else:
-            if len(game_owner.game.players) == MAX_PLAYERS - 1:
+            if user == game_owner or len(game_owner.game.players) == MAX_PLAYERS:
                 button.disabled = True
             # on_thread_member_join hook will add the user to the game
+            if not game_owner.game.thread:
+                raise KailleraError("Error finding game!")
+
             await game_owner.game.thread.add_user(interaction.user)
             await interaction.response.edit_message(view=self)
 
@@ -171,7 +174,7 @@ class GameThreadView(BaseKailleraGameView):
                 if user.game.thread is not None:
                     await user.game.thread.delete()
                 if user.game.create_game_interaction is not None:
-                    await user.game.create_game_interaction.edit_original_message(view=None)
+                    await user.game.create_game_interaction.edit_original_response(view=None)
                 for _user in user.game.players[:]:
                     if _user != user:
                         _user.game = None
@@ -226,7 +229,8 @@ class JoinedGameThreadView(GameThreadView):
             user.game.status = GameStatus.PLAYING
             embed = discord.Embed(title="Game Info", color=discord.Color.random())
             embed.add_field(
-                name="Ping", value="\n".join(f"**{player.username}** {player.ping}ms" for player in user.game.players)
+                name="Ping",
+                value="\n".join(f"**{player.username}** {player.ping}ms" for player in user.game.players),
             )
             embed.add_field(
                 name="Frame Delay",
@@ -235,13 +239,15 @@ class JoinedGameThreadView(GameThreadView):
             user.game.game_info_message = interaction.message
             start_game_thread_view = StartedGameThreadView()
             await interaction.response.edit_message(
-                content=f"{interaction.user.mention} has started the game!", view=start_game_thread_view, embed=embed
+                content=f"{interaction.user.mention} has started the game!",
+                view=start_game_thread_view,
+                embed=embed,
             )
 
 
 authenticating_connection_manager: ConnectionManager = ConnectionManager()
 authenticated_connection_manager: ConnectionManager = ConnectionManager()
-user_map: Dict[int, DiscordUser] = {}
+user_map: dict[int, DiscordUser] = {}
 
 
 async def process_ws_data(websocket: WebSocket, data: str, user_id: int) -> None:
@@ -254,7 +260,10 @@ async def process_ws_data(websocket: WebSocket, data: str, user_id: int) -> None
     elif data.startswith("GAME LIST"):
         user.game_list = data[9:].split(",")
     elif data.startswith("SERVER IP"):
-        user.game.address = data[9:]
+        if user.game:
+            user.game.address = data[9:]
+        else:
+            raise Exception("User not in a game!")
     elif data.startswith("PLAYER NUMBER"):
         user.player_number = int(data[13:])
         print(f"{user.username} is player number {user.player_number}")
@@ -269,7 +278,8 @@ async def process_ws_data(websocket: WebSocket, data: str, user_id: int) -> None
         embed = user.game.game_info_message.embeds[0]
         embed.clear_fields()
         embed.add_field(
-            name="Ping", value="\n".join(f"**{player.username}** {player.ping}ms" for player in user.game.players)
+            name="Ping",
+            value="\n".join(f"**{player.username}** {player.ping}ms" for player in user.game.players),
         )
         embed.add_field(
             name="Frame Delay",
@@ -305,7 +315,11 @@ async def discord_auth_callback(code: str) -> str:
                 dm_channel = await bot.create_dm(discord_user)
                 await dm_channel.send(dm_msg, delete_after=120.0)
                 user["id"] = int(user["id"])
-                user_map.update({user["id"]: DiscordUser(**user)})
+                try:
+                    user_map.update({user["id"]: DiscordUser(**user)})
+                except TypeError:
+                    print(f"Unable to create discord user {user}")
+                    raise
                 bot.loop.create_task(remove_user_if_not_authenticated(user["id"]))
     except aiohttp.client_exceptions.ClientError as e:
         raise e
@@ -326,7 +340,8 @@ async def auth_websocket_endpoint(websocket: WebSocket) -> None:
                     "https://discord.com/oauth2/authorize?client_id={client_id}"
                     "&redirect_uri={redirect_uri}&scope=identify"
                     "&response_type=code".format(
-                        client_id=os.environ["DISCORD_CLIENT_ID"], redirect_uri=os.environ["DISCORD_REDIRECT_URI"]
+                        client_id=os.environ["DISCORD_CLIENT_ID"],
+                        redirect_uri=os.environ["DISCORD_REDIRECT_URI"],
                     )
                 )
 
@@ -364,14 +379,16 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int) -> None:
                     await user.game.thread.delete()
                 except discord.NotFound:
                     pass
+                if user.game.created_game_thread_view is None:
+                    raise Exception("Unable to find created_game_thread_view for user game")
                 user.game.created_game_thread_view.stop()
                 user.game.created_game_thread_view.clear_items()
                 if user.game.create_game_interaction is not None:
-                    await user.game.create_game_interaction.edit_original_message(view=None)
+                    await user.game.create_game_interaction.edit_original_response(view=None)
             del user
 
 
-async def get_user_game_list(ctx: discord.AutocompleteContext) -> List[str]:
+async def get_user_game_list(ctx: discord.AutocompleteContext) -> list[str]:
     global user_map
     user = user_map.get(ctx.interaction.user.id)
     if not user:
@@ -380,12 +397,33 @@ async def get_user_game_list(ctx: discord.AutocompleteContext) -> List[str]:
         return user.game_list
 
 
+async def get_game_owners(ctx: discord.AutocompleteContext) -> list[discord.Member]:
+    global user_map
+
+    game_owners = []
+    for member in ctx.interaction.guild.members:
+        user = user_map.get(member.id)
+        if (
+            user
+            and user.id != ctx.interaction.user.id
+            and user.game
+            and user.game.status == GameStatus.IDLE
+            and user.game.owner == user
+        ):
+            game_owners.append(member)
+
+    return game_owners
+
+
 # Confirmation code
 @bot.slash_command(description="Enter the confirmation code from your kaillera client")
 @dm_only()
 async def auth(
     ctx: discord.ApplicationContext,
-    auth_id: discord.Option(str, description="The confirmation code from your kaillera client"),  # noqa: F722
+    auth_id: discord.Option(  # type: ignore
+        str,
+        description="The confirmation code from your kaillera client",  # noqa: F722
+    ),
 ) -> None:
     global user_map, authenticating_connection_manager
 
@@ -395,7 +433,7 @@ async def auth(
         raise BadArgument("Invalid authentication code")
 
     user = user_map.get(ctx.author.id)
-    if user.auth_state == AuthState.AUTH_SUCCESS:
+    if user and user.auth_state == AuthState.AUTH_SUCCESS:
         raise KailleraError("User has already been authenticated!")
     elif not auth_id:
         raise KailleraError("Please enter a valid auth id")
@@ -405,7 +443,7 @@ async def auth(
         websocket = authenticating_connection_manager.active_connections.pop(decoded_auth_id)
         await websocket.send_text(f"USER ID{ctx.author.id}")
         await websocket.send_text("AUTH SUCCESS")
-        user.auth_state = AuthState.AUTH_SUCCESS
+        user.auth_state = AuthState.AUTH_SUCCESS  # type: ignore
         await ctx.respond("Authentication successful!", delete_after=120.0)
 
 
@@ -414,7 +452,7 @@ async def auth(
 @guild_only()
 async def creategame(
     ctx: discord.ApplicationContext,
-    rom_name: discord.Option(
+    rom_name: discord.Option(  # type: ignore
         str,
         "Enter the name of the ROM you want to play",  # noqa: F722
         autocomplete=discord.utils.basic_autocomplete(get_user_game_list),
@@ -437,7 +475,8 @@ async def creategame(
         # so we skip creating a thread and just send a response to the user
         if not isinstance(ctx.channel, discord.PartialMessageable):
             thread = await ctx.channel.create_thread(
-                name=f"{ctx.author.name} {rom_name}", type=discord.ChannelType.public_thread
+                name=f"{ctx.author.name} {rom_name}",
+                type=discord.ChannelType.public_thread,
             )
             await thread.add_user(ctx.author)
             joined_game_thread_view = JoinedGameThreadView()
@@ -452,7 +491,8 @@ async def creategame(
             await websocket.send_text(f"CREATE GAME{rom_name}")
 
             user.game.create_game_interaction = await ctx.respond(
-                f"{ctx.author.mention} has created a game! Rom name: {rom_name}", view=created_game_thread_view
+                f"{ctx.author.mention} has created a game! Rom name: {rom_name}",
+                view=created_game_thread_view,
             )
         else:
             websocket = authenticated_connection_manager.active_connections[ctx.author.id]
@@ -476,6 +516,8 @@ async def leavegame(ctx: discord.ApplicationContext) -> None:
         await websocket.send_text("LEAVE GAME")
 
         if len(user.game.players) == MAX_PLAYERS:
+            if not user.game.created_game_thread_view:
+                raise Exception("Missing created_game_thread_view for user game")
             for child in user.game.created_game_thread_view.children:
                 if child.custom_id == "join_button":
                     child.disabled = False
@@ -521,7 +563,8 @@ async def startgame(ctx: discord.ApplicationContext) -> None:
         user.game.status = GameStatus.PLAYING
         embed = discord.Embed(title="Game Info", color=discord.Color.green())
         embed.add_field(
-            name="Ping", value="\n".join(f"**{player.username}** {player.ping}ms" for player in user.game.players)
+            name="Ping",
+            value="\n".join(f"**{player.username}** {player.ping}ms" for player in user.game.players),
         )
         embed.add_field(
             name="Frame Delay",
@@ -537,22 +580,16 @@ async def startgame(ctx: discord.ApplicationContext) -> None:
 @guild_only()
 async def joingame(
     ctx: discord.ApplicationContext,
-    host: discord.Option(
+    host: discord.Option(  # type: ignore
         discord.Member,
         "Select the user who's game you want to join",  # noqa: F722
-        # autocomplete=discord.utils.basic_autocomplete(
-        #     lambda ctx: [
-        #         discord.Object(id=user.id)
-        #         for user in user_map.values()
-        #         if user.game and user.game.status == GameStatus.IDLE and user.id != ctx.interaction.user.id
-        #     ]
-        # ),
+        autocomplete=discord.utils.basic_autocomplete(get_game_owners),
     ),
 ) -> None:
     global user_map, authenticated_connection_manager
 
     for user in user_map.values():
-        if host.id == user.id:
+        if host.id == user.id and user.game:
             game_id = user.game.id
             break
     else:
@@ -561,7 +598,7 @@ async def joingame(
         )
 
     game_owner = user_map.get(game_id)
-    user = user_map.get(ctx.author.id)
+    user = user_map.get(ctx.author.id)  # type: ignore
     if not user:
         raise KailleraError("You must be authenticated to use this command!")
     elif user.game:
@@ -579,23 +616,35 @@ async def joingame(
             await websocket.send_text(f"JOIN GAME{game_owner.game.address}")
             await websocket.send_text(f"ROM NAME{game_owner.game.rom_name}")
 
-            await ctx.respond(f"{ctx.author.mention} has joined {host.mention}'s game!", delete_after=10.0)
+            await ctx.respond(
+                f"{ctx.author.mention} has joined {host.mention}'s game!",
+                delete_after=10.0,
+            )
         else:
             await game_owner.game.thread.add_user(ctx.author)
             # on_thread_member_join hook will add the user to the game
 
 
 @bot.event
-async def on_application_command_error(ctx: discord.ApplicationContext, error: Exception) -> None:
+async def on_application_command_error(
+    ctx: discord.ApplicationContext,
+    error: (Exception | discord.ApplicationCommandInvokeError | NoPrivateMessage | PrivateMessageOnly),
+) -> None:
     if isinstance(error, discord.ApplicationCommandInvokeError):
-        await ctx.interaction.response.send_message(content=str(error.original), delete_after=10.0, ephemeral=True)
+        await ctx.interaction.response.send_message(
+            content=str(error.original), delete_after=10.0, ephemeral=True  # type: ignore
+        )
     elif isinstance(error, NoPrivateMessage):
         await ctx.interaction.response.send_message(
-            content="This command cannot be used in private messages.", delete_after=10.0, ephemeral=True
+            content="This command cannot be used in private messages.",
+            delete_after=10.0,
+            ephemeral=True,
         )
     elif isinstance(error, PrivateMessageOnly):
         await ctx.interaction.response.send_message(
-            content="This command can only be used in private messages.", delete_after=10.0, ephemeral=True
+            content="This command can only be used in private messages.",
+            delete_after=10.0,
+            ephemeral=True,
         )
     else:
         raise error
@@ -654,10 +703,14 @@ async def on_thread_member_remove(thread_member: discord.ThreadMember) -> None:
             and thread_member.thread == game_owner.game.thread
             and user_map[thread_member.id].game is not None
         ):
-            if thread_member.id in [user.id for user in game_owner.game.players]:
+            if thread_member.id in (user.id for user in game_owner.game.players):
                 user = user_map.get(thread_member.id)
                 websocket = authenticated_connection_manager.active_connections[thread_member.id]
                 await websocket.send_text("LEAVE GAME")
+                if not user:
+                    return
+                if not user.game:
+                    return
                 if user == user.game.owner:
                     if user.game.thread is not None:
                         await user.game.thread.delete()
@@ -670,11 +723,6 @@ async def on_thread_member_remove(thread_member: discord.ThreadMember) -> None:
 
                 user.game = None
                 return
-
-
-# @bot.user_command(name="Say Hello")
-# async def hi(ctx, user):
-#     await ctx.respond(f"{ctx.author.mention} says hello to {user.name}!")
 
 
 async def run_bot() -> None:

@@ -9,7 +9,7 @@ kill_timeout = 5
   PORT = "8080"
 
 [build]
-  builder = "heroku/buildpacks:18"
+  builder = "heroku/buildpacks:20"
 
 
 [[services]]

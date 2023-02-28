@@ -1,22 +1,57 @@
 default_language_version:
-  python: python3.10
+  python: python3.11
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.1.0
+    rev: v4.4.0
     hooks:
+      - id: check-ast
       - id: detect-private-key
       - id: end-of-file-fixer
       - id: trailing-whitespace
       - id: check-yaml
+      - id: check-toml
+      - id: check-json
       - id: check-merge-conflict
+      - id: requirements-txt-fixer
+      - id: debug-statements
+
   - repo: https://github.com/psf/black
-    rev: stable
+    rev: 23.1.0
     hooks:
       - id: black
         args: [--line-length=120]
-  - repo: https://gitlab.com/pycqa/flake8
-    rev: 4.0.1
+
+  - repo: https://github.com/myint/autoflake
+    rev: v2.0.1
+    hooks:
+      - id: autoflake
+        args:
+          - --in-place
+          - --remove-unused-variables
+          - --remove-duplicate-keys
+          - --remove-all-unused-imports
+          - --ignore-init-module-imports
+
+  - repo: https://github.com/asottile/reorder_python_imports
+    rev: v3.9.0
+    hooks:
+      - id: reorder-python-imports
+        args: [--py38-plus]
+
+  - repo: https://github.com/asottile/pyupgrade
+    rev: v2.34.0
+    hooks:
+      - id: pyupgrade
+        args: ["--py311-plus"]
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: "v1.0.1" # Use the sha / tag you want to point at
+    hooks:
+      - id: mypy
+
+  - repo: https://github.com/PyCQA/flake8
+    rev: 6.0.0
     hooks:
       - id: flake8
         additional_dependencies:
@@ -24,8 +59,11 @@ repos:
           - flake8-builtins
           - flake8-comprehensions
           - flake8-tidy-imports
-  - repo: https://github.com/asottile/reorder_python_imports
-    rev: v2.7.1
+
+  - repo: https://github.com/pdm-project/pdm
+    rev: 2.4.6 # a PDM release exposing the hook
     hooks:
-      - id: reorder-python-imports
-        args: [--py38-plus]
+      - id: pdm-export
+        # command arguments, e.g.:
+        args: ["-o", "requirements.txt", "--without-hashes"]
+        files: ^pdm.lock$
