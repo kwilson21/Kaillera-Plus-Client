@@ -407,8 +407,8 @@ async def get_game_owners(ctx: discord.AutocompleteContext) -> list[discord.Memb
             user
             and user.id != ctx.interaction.user.id
             and user.game
-            and user.game.status == GameStatus.IDLE
-            and user.game.owner == user
+            and user.game.status is GameStatus.IDLE
+            and user.game.owner is user
         ):
             game_owners.append(member)
 
