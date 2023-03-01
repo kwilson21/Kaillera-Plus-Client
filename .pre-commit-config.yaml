@@ -2,6 +2,14 @@ default_language_version:
   python: python3.11
 
 repos:
+  - repo: https://github.com/pdm-project/pdm
+    rev: 2.4.6 # a PDM release exposing the hook
+    hooks:
+      - id: pdm-export
+        # command arguments, e.g.:
+        args: ["-o", "requirements.txt", "--without-hashes"]
+        files: ^pdm.lock$
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.4.0
     hooks:
@@ -79,11 +87,3 @@ repos:
           - --ignore-missing-imports
           - --install-types # See mirrors-mypy README.md
           - --non-interactive
-
-  - repo: https://github.com/pdm-project/pdm
-    rev: 2.4.6 # a PDM release exposing the hook
-    hooks:
-      - id: pdm-export
-        # command arguments, e.g.:
-        args: ["-o", "requirements.txt", "--without-hashes"]
-        files: ^pdm.lock$
