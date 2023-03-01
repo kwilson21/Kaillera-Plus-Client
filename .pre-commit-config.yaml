@@ -32,11 +32,22 @@ repos:
           - --remove-duplicate-keys
           - --remove-all-unused-imports
 
-  - repo: https://github.com/asottile/reorder_python_imports
-    rev: v3.9.0
+  - repo: https://github.com/PyCQA/isort
+    rev: 5.12.0
     hooks:
-      - id: reorder-python-imports
-        args: [--py38-plus]
+      - id: isort
+        args:
+          - --profile=black
+
+  - repo: https://github.com/tox-dev/pyproject-fmt
+    rev: "0.9.2"
+    hooks:
+      - id: pyproject-fmt
+
+  - repo: https://github.com/abravalheri/validate-pyproject
+    rev: v0.12.1
+    hooks:
+      - id: validate-pyproject
 
   - repo: https://github.com/asottile/pyupgrade
     rev: v2.34.0
@@ -44,20 +55,30 @@ repos:
       - id: pyupgrade
         args: ["--py311-plus"]
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: "v1.0.1" # Use the sha / tag you want to point at
-    hooks:
-      - id: mypy
-
   - repo: https://github.com/PyCQA/flake8
     rev: 6.0.0
     hooks:
       - id: flake8
-        additional_dependencies:
+        additional_dependencies: &flake8-plugins
           - flake8-bugbear
           - flake8-builtins
           - flake8-comprehensions
           - flake8-tidy-imports
+
+  - repo: https://github.com/asottile/yesqa
+    rev: v1.4.0
+    hooks:
+      - id: yesqa
+        additional_dependencies: *flake8-plugins
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.0.1
+    hooks:
+      - id: mypy
+        args:
+          - --ignore-missing-imports
+          - --install-types # See mirrors-mypy README.md
+          - --non-interactive
 
   - repo: https://github.com/pdm-project/pdm
     rev: 2.4.6 # a PDM release exposing the hook
