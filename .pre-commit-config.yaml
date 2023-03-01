@@ -31,7 +31,6 @@ repos:
           - --remove-unused-variables
           - --remove-duplicate-keys
           - --remove-all-unused-imports
-          - --ignore-init-module-imports
 
   - repo: https://github.com/asottile/reorder_python_imports
     rev: v3.9.0
