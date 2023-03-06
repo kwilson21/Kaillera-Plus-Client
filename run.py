@@ -3,20 +3,19 @@ import os
 import sys
 import traceback
 import uuid
-from dataclasses import dataclass
-from dataclasses import field
+from dataclasses import dataclass, field
 from enum import Enum
 
 import aiohttp
 import discord
-from discord.ext.commands import BadArgument
-from discord.ext.commands import dm_only
-from discord.ext.commands import guild_only
-from discord.ext.commands import NoPrivateMessage
-from discord.ext.commands import PrivateMessageOnly
-from fastapi import FastAPI
-from fastapi import WebSocket
-from fastapi import WebSocketDisconnect
+from discord.ext.commands import (
+    BadArgument,
+    NoPrivateMessage,
+    PrivateMessageOnly,
+    dm_only,
+    guild_only,
+)
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi_discord import DiscordOAuthClient
 from hashids import Hashids
 
@@ -715,7 +714,7 @@ async def on_thread_member_join(thread_member: discord.ThreadMember) -> None:
                 await thread_member.thread.remove_user(thread_member)
                 return
 
-            if thread_member.id not in [_user.id for _user in game_owner.game.players]:
+            if thread_member.id not in (_user.id for _user in game_owner.game.players):
                 websocket = authenticated_connection_manager.active_connections[thread_member.id]
                 game_owner.game.players.append(user)
                 user.game = game_owner.game

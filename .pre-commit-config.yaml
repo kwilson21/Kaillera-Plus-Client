@@ -30,6 +30,18 @@ repos:
       - id: black
         args: [--line-length=120]
 
+  - repo: https://github.com/charliermarsh/ruff-pre-commit
+    # Ruff version.
+    rev: "v0.0.254"
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix, --line-length=120]
+
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.2.2
+    hooks:
+      - id: codespell
+
   - repo: https://github.com/myint/autoflake
     rev: v2.0.1
     hooks:
@@ -62,23 +74,6 @@ repos:
     hooks:
       - id: pyupgrade
         args: ["--py311-plus"]
-
-  - repo: https://github.com/PyCQA/flake8
-    rev: 6.0.0
-    hooks:
-      - id: flake8
-        additional_dependencies: &flake8-plugins
-          - flake8-bugbear
-          - flake8-builtins
-          - flake8-comprehensions
-          - flake8-tidy-imports
-          - flake8-async
-
-  - repo: https://github.com/asottile/yesqa
-    rev: v1.4.0
-    hooks:
-      - id: yesqa
-        additional_dependencies: *flake8-plugins
 
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.0.1
